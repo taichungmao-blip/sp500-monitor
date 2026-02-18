@@ -6,7 +6,7 @@ import io
 import os
 import sys
 import time
-from deep_translator import GoogleTranslator  # 新增翻譯模組
+from deep_translator import GoogleTranslator
 
 # ================= 設定區 =================
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -51,40 +51,51 @@ def get_sp500_tickers_info():
         print(f"無法抓取 Wiki 資料: {e}")
         return {}
 
-def get_company_summary(ticker):
-    """從 yfinance 獲取簡介並翻譯成繁體中文"""
+def get_company_details(ticker):
+    """從 yfinance 獲取簡介並翻譯，同時取得本益比與股息率"""
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
+        
+        # --- 獲取本益比與股息率 ---
+        pe_ratio = info.get('trailingPE', info.get('forwardPE', 'N/A'))
+        if isinstance(pe_ratio, (int, float)):
+            pe_ratio = f"{pe_ratio:.2f}"
+            
+        div_yield = info.get('dividendYield', 'N/A')
+        if isinstance(div_yield, (int, float)):
+            div_yield = f"{div_yield * 100:.2f}%"
+        elif div_yield is None:
+            div_yield = "N/A"
+            
         summary_en = info.get('longBusinessSummary', '')
         
         if not summary_en:
-            return "暫無簡介"
+            return "暫無簡介", pe_ratio, div_yield
 
-        # 為了翻譯品質與速度，先擷取前 300 個字元 (通常包含最核心的第一段)
         if len(summary_en) > 300:
             summary_en = summary_en[:300]
 
-        # 執行翻譯 (目標語言: 繁體中文)
         translator = GoogleTranslator(source='auto', target='zh-TW')
         summary_zh = translator.translate(summary_en)
         
-        return summary_zh + "..." # 加上刪節號表示有後續
+        return summary_zh + "...", pe_ratio, div_yield
         
     except Exception as e:
-        print(f"簡介獲取或翻譯失敗 ({ticker}): {e}")
-        return "無法獲取簡介 (翻譯失敗)"
+        print(f"資料獲取或翻譯失敗 ({ticker}): {e}")
+        return "無法獲取簡介 (翻譯失敗)", "N/A", "N/A"
 
-def send_to_discord(ticker, info, close_price, pct_change, image_buffer, summary):
+def send_to_discord(ticker, info, close_price, pct_change, image_buffer, summary, pe_ratio, div_yield):
     """發送至 Discord"""
-    
     company_name = info.get('Security', ticker)
     sector_en = info.get('GICS Sector', 'Unknown')
     sector_cn = SECTOR_MAP.get(sector_en, sector_en)
     
+    # --- 訊息內容加入本益比與股息率 ---
     message_content = (
         f"**{ticker} - {company_name}**\n"
         f"🏢 版塊: {sector_cn} ({sector_en})\n"
+        f"📊 本益比 (P/E): **{pe_ratio}** |  💰 股息率: **{div_yield}**\n"
         f"📝 簡介: {summary}\n"
         f"🔹 收盤價: ${close_price:.2f}\n"
         f"📈 漲跌幅: **{pct_change * 100:.2f}%**"
@@ -138,13 +149,12 @@ def main():
             plt.savefig(buf, format='png')
             plt.close()
             
-            # 獲取並翻譯簡介
-            summary = get_company_summary(ticker)
+            # --- 解構賦值接收三個回傳值 ---
+            summary, pe_ratio, div_yield = get_company_details(ticker)
             company_info = sp500_info.get(ticker, {})
             
-            send_to_discord(ticker, company_info, close_price, pct, buf, summary)
+            send_to_discord(ticker, company_info, close_price, pct, buf, summary, pe_ratio, div_yield)
             
-            # 休息 1 秒，避免翻譯請求太頻繁被擋
             time.sleep(1)
             
         except Exception as e:
