@@ -48,36 +48,51 @@ def get_sp500_tickers_info():
         print(f"無法抓取 Wiki 資料: {e}")
         return {}
 
-def get_company_summary(ticker):
-    """獲取簡介並翻譯成繁體中文"""
+def get_company_details(ticker):
+    """獲取簡介翻譯、本益比與股息率"""
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
+        
+        # --- 獲取本益比與股息率 ---
+        pe_ratio = info.get('trailingPE', info.get('forwardPE', 'N/A'))
+        if isinstance(pe_ratio, (int, float)):
+            pe_ratio = f"{pe_ratio:.2f}"
+            
+        div_yield = info.get('dividendYield', 'N/A')
+        if isinstance(div_yield, (int, float)):
+            div_yield = f"{div_yield * 100:.2f}%"
+        elif div_yield is None:
+            div_yield = "N/A"
+
         summary_en = info.get('longBusinessSummary', '')
         
         if not summary_en:
-            return "暫無簡介"
+            return "暫無簡介", pe_ratio, div_yield
 
         if len(summary_en) > 300:
             summary_en = summary_en[:300]
 
         translator = GoogleTranslator(source='auto', target='zh-TW')
-        return translator.translate(summary_en) + "..."
+        summary_zh = translator.translate(summary_en) + "..."
+        
+        return summary_zh, pe_ratio, div_yield
         
     except Exception as e:
-        print(f"簡介翻譯失敗 ({ticker}): {e}")
-        return "無法獲取簡介"
+        print(f"資料獲取或翻譯失敗 ({ticker}): {e}")
+        return "無法獲取簡介", "N/A", "N/A"
 
-def send_to_discord(ticker, info, close_price, pct_change, image_buffer, summary):
+def send_to_discord(ticker, info, close_price, pct_change, image_buffer, summary, pe_ratio, div_yield):
     """發送至 Discord"""
     company_name = info.get('Security', ticker)
     sector_en = info.get('GICS Sector', 'Unknown')
     sector_cn = SECTOR_MAP.get(sector_en, sector_en)
     
-    # 這裡加上了 📉 符號
+    # --- 訊息內容加入本益比與股息率 ---
     message_content = (
         f"📉 **{ticker} - {company_name}**\n"
         f"🏢 版塊: {sector_cn} ({sector_en})\n"
+        f"📊 本益比 (P/E): **{pe_ratio}** |  💰 股息率: **{div_yield}**\n"
         f"📝 簡介: {summary}\n"
         f"🔹 收盤價: ${close_price:.2f}\n"
         f"🔻 跌幅: **{pct_change * 100:.2f}%**" 
@@ -104,8 +119,6 @@ def main():
         return
 
     returns = data.pct_change().iloc[-1]
-    
-    # --- 關鍵修改點：取最小的 10 個 (跌幅最重) ---
     top_10_losers = returns.nsmallest(10)
     
     print("\n--- 今日跌幅最重前 10 名 ---")
@@ -119,7 +132,6 @@ def main():
             close_price = stock_data['Close'].iloc[-1].item()
             
             plt.figure(figsize=(10, 5))
-            # --- 關鍵修改點：線條改為綠色 (台灣習慣：綠跌) ---
             plt.plot(stock_data.index, stock_data['Close'], color='green', linewidth=1.5)
             plt.title(f"{ticker} - 1 Year Trend (Drop)", fontsize=14)
             plt.grid(True, linestyle='--', alpha=0.5)
@@ -129,11 +141,12 @@ def main():
             plt.savefig(buf, format='png')
             plt.close()
             
-            summary = get_company_summary(ticker)
+            # --- 解構賦值接收三個回傳值 ---
+            summary, pe_ratio, div_yield = get_company_details(ticker)
             company_info = sp500_info.get(ticker, {})
             
-            send_to_discord(ticker, company_info, close_price, pct, buf, summary)
-            time.sleep(1) # 避免翻譯 API 過載
+            send_to_discord(ticker, company_info, close_price, pct, buf, summary, pe_ratio, div_yield)
+            time.sleep(1) 
             
         except Exception as e:
             print(f"處理 {ticker} 時發生錯誤: {e}")
