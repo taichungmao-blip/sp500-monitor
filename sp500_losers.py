@@ -48,27 +48,38 @@ def get_sp500_tickers_info():
         print(f"無法抓取 Wiki 資料: {e}")
         return {}
 
-def get_company_details(ticker):
-    """獲取簡介翻譯、本益比與股息率"""
+def get_company_details(ticker, close_price):
+    """獲取簡介翻譯，並手動計算對齊看盤軟體的股息率"""
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
         
-        # --- 獲取本益比與股息率 ---
+        # --- 獲取本益比 ---
         pe_ratio = info.get('trailingPE', info.get('forwardPE', 'N/A'))
         if isinstance(pe_ratio, (int, float)):
             pe_ratio = f"{pe_ratio:.2f}"
             
-        div_yield = info.get('dividendYield', 'N/A')
-        if isinstance(div_yield, (int, float)):
-            div_yield = f"{div_yield * 100:.2f}%"
-        elif div_yield is None:
-            div_yield = "N/A"
+        # --- 獲取並精準計算股息率 (TTM) ---
+        trailing_div_rate = info.get('trailingAnnualDividendRate')
+        
+        if isinstance(trailing_div_rate, (int, float)) and close_price > 0:
+            # 手動計算：過去12個月股息 / 當前收盤價
+            div_yield = (trailing_div_rate / close_price) * 100
+            div_yield_str = f"{div_yield:.2f}%" if div_yield > 0 else "0.00%"
+        else:
+            # 備用方案
+            raw_yield = info.get('dividendYield')
+            if isinstance(raw_yield, (int, float)):
+                if raw_yield > 0.3:
+                    div_yield_str = f"{raw_yield:.2f}%"
+                else:
+                    div_yield_str = f"{raw_yield * 100:.2f}%"
+            else:
+                div_yield_str = "N/A"
 
         summary_en = info.get('longBusinessSummary', '')
-        
         if not summary_en:
-            return "暫無簡介", pe_ratio, div_yield
+            return "暫無簡介", pe_ratio, div_yield_str
 
         if len(summary_en) > 300:
             summary_en = summary_en[:300]
@@ -76,7 +87,7 @@ def get_company_details(ticker):
         translator = GoogleTranslator(source='auto', target='zh-TW')
         summary_zh = translator.translate(summary_en) + "..."
         
-        return summary_zh, pe_ratio, div_yield
+        return summary_zh, pe_ratio, div_yield_str
         
     except Exception as e:
         print(f"資料獲取或翻譯失敗 ({ticker}): {e}")
@@ -88,7 +99,6 @@ def send_to_discord(ticker, info, close_price, pct_change, image_buffer, summary
     sector_en = info.get('GICS Sector', 'Unknown')
     sector_cn = SECTOR_MAP.get(sector_en, sector_en)
     
-    # --- 訊息內容加入本益比與股息率 ---
     message_content = (
         f"📉 **{ticker} - {company_name}**\n"
         f"🏢 版塊: {sector_cn} ({sector_en})\n"
@@ -141,8 +151,8 @@ def main():
             plt.savefig(buf, format='png')
             plt.close()
             
-            # --- 解構賦值接收三個回傳值 ---
-            summary, pe_ratio, div_yield = get_company_details(ticker)
+            # --- 將 close_price 傳入以計算精準股息率 ---
+            summary, pe_ratio, div_yield = get_company_details(ticker, close_price)
             company_info = sp500_info.get(ticker, {})
             
             send_to_discord(ticker, company_info, close_price, pct, buf, summary, pe_ratio, div_yield)
