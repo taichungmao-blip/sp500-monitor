@@ -142,7 +142,7 @@ def main():
     
     for rank, (ticker, pct) in enumerate(top_10.items(), start=1):
         try:
-            stock_data = yf.download(ticker, period="8m", progress=False)
+            stock_data = yf.download(ticker, period="9mo", progress=False)
             if stock_data.empty: continue
             
             close_price = stock_data['Close'].iloc[-1].item()
