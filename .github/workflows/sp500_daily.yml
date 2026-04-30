@@ -2,7 +2,7 @@ name: SP500 Daily Tracker
 
 on:
   schedule:
-    - cron: '0 22 * * 1-5' # 台灣時間早上 6:00
+    - cron: '0 21 * * 1-5' # 台灣時間早上 6:00
   workflow_dispatch: 
 
 jobs:
